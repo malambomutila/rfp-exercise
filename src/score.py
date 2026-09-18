@@ -81,8 +81,8 @@ RECENCY_WINDOW_DAYS = 7
 RECENCY_FLOOR = 5
 
 # Tier thresholds, inclusive lower bounds.
-TIER_HIGH_MIN = 50
-TIER_MEDIUM_MIN = 33
+TIER_HIGH_MIN = 45
+TIER_MEDIUM_MIN = 30
 
 # ---------------------------------------------------------------------------
 # Layer 2 configuration.
@@ -179,6 +179,34 @@ NEGATIVE_TERMS = [
     # from francophone west Africa untranslated.
     "acquisition de", "fourniture de", "fournitures", "materiel", "materiels",
     "mobilier", "mobiliers", "travaux de", "achat de", "location de",
+    # Equipment supply notices that reach the feed with service-sounding words
+    # attached, for example "supply, delivery, installation and calibration".
+    "supply, delivery", "installation and calibration", "calibration",
+    "installation of", "commissioning of",
+    # Biomedical and laboratory science. Grants.gov carries a large volume of
+    # NIH calls whose research language scores well on the service terms but
+    # which are nothing like IDinsight's applied development analytics work.
+    "somatic", "mosaicism", "genomic", "genome", "molecular", "in vitro",
+    "preclinical", "biomarker", "psychotropic", "neurobiology", "cell line",
+    "animal model", "biological materials", "assay", "pathogenesis",
+    "clinical trial network", "drug discovery", "vaccine development",
+    # Academic award mechanisms. The remaining Grants.gov false positives are
+    # United States research training and career grants for universities, for
+    # example "Emerging Global Leader Award (K43)". They score well because
+    # they are global and use the word research, but IDinsight cannot bid for
+    # them: the recipient must be an academic institution. The bare activity
+    # codes are matched on word boundaries, so they cannot fire inside a
+    # longer word.
+    "research training", "training grant", "career development award",
+    "fellowship", "postdoctoral", "mentored", "k43", "r01", "u01", "r21",
+    "notice of special interest", "notice of intent to publish",
+    # Posts advertised for one named individual. IDinsight bids as an
+    # organisation, so an individual consultant post is not a project
+    # opportunity however well the subject matter fits. ASSUMPTION: "hiring
+    # the" is deliberately NOT in this list, because "hiring the services of a
+    # firm" is a legitimate tender opening.
+    "individual consultant", "individual contractor", "vacancy",
+    "internship", "roster of consultants",
 ]
 
 
@@ -567,6 +595,43 @@ def score_record(record, today=None):
     # research work. If a notice contains none of that language, geography and
     # sector alone must not be able to promote it out of the Low tier.
     if service == 0:
+        total = min(total, TIER_MEDIUM_MIN - 1)
+
+    # Geography gate. IDinsight works in Africa and Asia, so a notice that
+    # names no priority country and no priority region is not a High priority
+    # call on the director's time even when the subject matter fits well. The
+    # clearest case is the EU feed: a domestic Irish or Belgian research
+    # tender can score well on sector, service and freshness alone. Such a
+    # notice is still shown, and can still reach Medium, because a funder
+    # sometimes runs a global call from a European buyer, but it cannot lead
+    # the page ahead of work in an IDinsight country. Note that the regional
+    # vocabulary includes "global" and "multi-country", so a genuinely global
+    # call does clear this gate.
+    if geography == 0:
+        total = min(total, TIER_HIGH_MIN - 1)
+
+    # High tier gate. A notice only reaches High when it names work IDinsight
+    # actually sells, which means at least one strong service term. Supporting
+    # words on their own are not enough: "research" plus "health" plus "global"
+    # was lifting United States academic research grants to the top of the
+    # page, and the director should not have to discover for herself that the
+    # best looking item is something IDinsight cannot bid for. This is a
+    # structural backstop rather than another keyword, so it keeps holding as
+    # the feeds change and the negative vocabulary falls behind them.
+    if not strong and total >= TIER_HIGH_MIN:
+        total = TIER_HIGH_MIN - 1
+
+    # Actionability gate. A lead has to be either somewhere IDinsight works or
+    # a piece of work IDinsight sells. A notice that is neither is not a lead,
+    # whatever else it mentions. This is what keeps the United States domestic
+    # calls that Grants.gov carries in bulk out of the shortlist: a tribal
+    # review board, an unemployment insurance centre and a quantum computing
+    # competition all matched on a supporting word plus the sector word
+    # "health", with no priority country and no service IDinsight offers, and
+    # five of the top ten rows were notices of that kind. They are still
+    # published in the Low section rather than hidden, so nothing is lost if
+    # the judgement is wrong on a given day.
+    if not strong and geography == 0:
         total = min(total, TIER_MEDIUM_MIN - 1)
 
     scored = dict(record)
@@ -1059,9 +1124,14 @@ if __name__ == "__main__":
         _normalise("Third-party monitoring agent"), _SERVICE_STRONG_PATTERNS
     )
 
-    # Tier boundaries.
-    assert tier_for(65) == "High" and tier_for(64) == "Medium"
-    assert tier_for(40) == "Medium" and tier_for(39) == "Low"
+    # Tier boundaries. Asserted against the constants rather than against
+    # literal numbers, so that retuning the thresholds cannot silently break
+    # this smoke test the way hardcoded values did.
+    assert tier_for(TIER_HIGH_MIN) == "High"
+    assert tier_for(TIER_HIGH_MIN - 1) == "Medium"
+    assert tier_for(TIER_MEDIUM_MIN) == "Medium"
+    assert tier_for(TIER_MEDIUM_MIN - 1) == "Low"
+    assert TIER_MEDIUM_MIN < TIER_HIGH_MIN, "tier thresholds must be ordered"
 
     # An undated record still scores rather than crashing the run.
     undated = score_record({"title": "Impact evaluation", "published": "not-a-date"},

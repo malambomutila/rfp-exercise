@@ -70,10 +70,31 @@ sector it sits in.
 | Freshness | 20 | 20 points for a notice published today, decaying in a straight line to 5 points at seven days old. |
 | Negative signals | minus 40 | Terms that mark work IDinsight does not do: construction, civil works, equipment supply, vehicle hire, catering, printing, security or cleaning services, fuel, drilling, road rehabilitation. The first match costs 20, each further one 10. The penalty is halved when a strong service term also fired, so that "third party monitoring of a road rehabilitation programme" is not buried. |
 
-The total is clamped to the 0 to 100 range and mapped to a tier: **High** at 65
-and above, **Medium** from 40 to 64, **Low** below 40. Each notice also carries
-a one line rationale naming the terms that fired, and the report shows the
-component breakdown, so any ranking can be audited without reading the code.
+The total is clamped to the 0 to 100 range and mapped to a tier: **High** at 45
+and above, **Medium** from 30 to 44, **Low** below 30. Those thresholds were set
+against the live feeds rather than guessed: the components rarely all fire at
+once, so a notice in the middle forties is already a strong fit. Each notice
+also carries a one line rationale naming the terms that fired, and the report
+shows the component breakdown, so any ranking can be audited without reading
+the code.
+
+Two gates then override the arithmetic, because on a real day of tender data
+the additive score alone promotes the wrong things:
+
+- **Service gate.** A notice naming none of IDinsight's services cannot leave
+  the Low tier, however good the country and sector look. This stops an office
+  furniture tender in Kenya outranking an evaluation.
+- **Geography gate.** A notice naming no priority country and no priority
+  region cannot reach High. This keeps domestic European research tenders,
+  which the EU feed supplies in volume, out of the lead position. "Global" and
+  "multi-country" count as priority regions, so a genuinely global call is
+  unaffected.
+
+Two further filters cut noise before the page is written. Contract **award**
+notices are dropped at the source, because an award records a contract already
+placed: on 18 September 2026 they were 538 of the 733 World Bank notices in the
+window. Anything scoring below 20 is then left out of the report, which on a
+typical day is roughly three quarters of the raw feed.
 
 Two layers, in this order:
 

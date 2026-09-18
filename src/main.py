@@ -95,7 +95,18 @@ def build(days=7, out_dir="site", archive_dir="reports", use_llm=True):
         shutil.copyfile(index_path, stamped)
         _log(f"stage archive: {stamped}")
 
-    return scored
+    # Copy the custom domain file into the site output if the repository has
+    # one. actions/upload-pages-artifact only uploads the directory it is
+    # given, so a CNAME left at the repository root never reaches Pages and
+    # the custom domain silently falls back to the github.io address.
+    cname = Path(__file__).resolve().parent.parent / "CNAME"
+    if cname.is_file():
+        shutil.copyfile(cname, Path(out_dir) / "CNAME")
+        _log(f"stage cname:   copied CNAME into {out_dir}")
+
+    # Return what was rendered, not everything that was scored, so the caller
+    # reports the number the director will actually see on the page.
+    return shortlist
 
 
 def fetch_source_names():
@@ -144,7 +155,7 @@ def main(argv=None):
         _log(f"FAILED: {type(error).__name__}: {error}")
         return 1
 
-    _log(f"done: {len(scored)} opportunities in the report")
+    _log(f"done: {len(scored)} opportunities rendered in the report")
     return 0
 
 

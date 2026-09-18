@@ -179,7 +179,23 @@ def _strip_html(raw):
     text = html.unescape(text)
     text = _ANY_TAG.sub(" ", text)
     text = text.replace("\xa0", " ")
+    text = _normalise_dashes(text)
     return _WHITESPACE.sub(" ", text).strip()
+
+
+# House style forbids em and en dashes. The TED feed uses " - " (en dash) as the
+# separator in every title, for example "Ireland - Social research services -
+# Request for Tenders...", so the dashes arrive from the source rather than from
+# anything we write. A separating dash becomes a comma, which reads naturally in
+# a title, and a dash used inside a word becomes a plain hyphen.
+_SPACED_DASH = re.compile(r"\s*[\u2013\u2014]\s+")
+_BARE_DASH = re.compile(r"[\u2013\u2014]")
+
+
+def _normalise_dashes(text):
+    """Replace en and em dashes so the rendered page keeps to house style."""
+    text = _SPACED_DASH.sub(", ", text)
+    return _BARE_DASH.sub("-", text)
 
 
 def _trim(text, limit=SUMMARY_LIMIT):
@@ -423,6 +439,16 @@ def fetch_worldbank(since_date):
                 reached_window_end = True
                 continue
             if str(notice.get("notice_status", "")).lower() == "cancelled":
+                continue
+
+            # Skip contract awards. An award notice records that the contract
+            # has already been placed, so it is a closed piece of work and not
+            # something the director can pursue. They are the bulk of this
+            # feed: 538 of 733 notices in the 7 day window checked on
+            # 2026-09-18, and leaving them in put an already awarded
+            # consultancy at the top of the report. fetch_ted already filters
+            # award notices the same way, so this makes the two consistent.
+            if "award" in str(notice.get("notice_type", "")).lower():
                 continue
 
             notice_id = str(notice.get("id") or "").strip()
