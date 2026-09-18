@@ -40,6 +40,11 @@ services:
     container_name: rfp_cron
     restart: unless-stopped
     command: ["/bin/sh", "/app/bin/run-scheduler.sh"]
+    # Write generated files as the host user rather than root. Without this the
+    # report archive ends up owned by root, and on a host where your user has
+    # no passwordless sudo you cannot then prune or restore it. Override
+    # RFP_UID and RFP_GID in .env if your user is not 1000.
+    user: "${RFP_UID:-1000}:${RFP_GID:-1000}"
     volumes:
       # The pipeline itself, read-only. Two directories up from deploy/server
       # is the repository root.

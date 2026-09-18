@@ -33,11 +33,24 @@ import time
 
 # Wall clock budget in seconds for a single source. One slow portal must not
 # hold up the whole daily run, so we abandon it and carry on with the rest.
-SOURCE_TIMEOUT_SECONDS = 45
+#
+# Sized against what the sources actually need, not guessed. These were 45 and
+# 150, set when the pipeline read four JSON APIs inside a CI job with its own
+# time limit. Both are now far too tight and were silently discarding real
+# work: UNGM issues around 27 requests spaced 1.5 seconds apart for politeness,
+# so it cannot finish inside 45 seconds, and it was being cancelled after
+# having already found 98 matching notices. The web sources each wait on a
+# model call that is itself allowed 150 seconds.
+#
+# There is no external time limit any more: the pipeline runs once a day in a
+# container on our own server, so the budget only needs to be short enough that
+# a genuinely hung source cannot stall the report indefinitely.
+SOURCE_TIMEOUT_SECONDS = 240
 
-# Budget for the entire concurrent fetch. Even if several sources are slow, the
-# Actions job stays well inside its own time limit.
-TOTAL_FETCH_TIMEOUT_SECONDS = 150
+# Budget for the entire concurrent fetch. Sources run in parallel, so this is
+# not the sum of the per-source budgets, it is the backstop for the whole
+# stage.
+TOTAL_FETCH_TIMEOUT_SECONDS = 600
 
 # Fixed by the agreed architecture.
 MAX_WORKERS = 8
