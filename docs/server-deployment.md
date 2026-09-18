@@ -264,3 +264,56 @@ would take every other service on the host offline.
 - The certificate directories under
   `/home/mm/srv/ohasp/nginx/ssl/live/` are root-owned and cannot be read from
   the host shell as `mm`. Read them through a container instead.
+
+## Login gate
+
+The report on `rfp.malambomutila.com` sits behind a shared login. The GitHub
+Pages mirror does not, because static Pages hosting cannot authenticate.
+
+Two containers serve the site, both defined in
+`/home/mm/apps/rfp/docker-compose.yml`:
+
+| Container | Role |
+|---|---|
+| `rfp_site` | nginx, serves the static report and enforces the gate |
+| `rfp_auth` | Python standard library service, validates the login form |
+
+nginx cannot check a form POST on its own, so `rfp_site` issues an
+`auth_request` subrequest to `rfp_auth` for every content request. `rfp_auth`
+answers 204 when the session cookie is valid and 401 when it is not, and a 401
+redirects the visitor to `/login`. The cookie is stateless: it carries an
+expiry and an HMAC-SHA256 signature over it, so there is no session store.
+
+### Credentials
+
+They live in `/home/mm/apps/rfp/.env` on the server, mode 600, and are never
+committed, because this repository is public. `deploy/server/.env.example`
+shows the shape. To change them:
+
+```
+nano /home/mm/apps/rfp/.env
+cd /home/mm/apps/rfp && docker compose up -d rfp_auth
+```
+
+Generate a fresh signing key with
+`python3 -c "import secrets; print(secrets.token_hex(32))"`. Changing it signs
+everyone out, which is the quickest way to revoke access.
+
+### Scope
+
+This is a courtesy gate over public tender notices, with one shared account
+rather than per-user logins. It is not an access control for anything
+sensitive. nginx rate limits `/login` to 10 requests a minute per address, and
+the service adds a short delay on a failed attempt.
+
+### Rolling it back
+
+The pre-login configuration is kept on the server:
+
+```
+cd /home/mm/apps/rfp
+cp nginx-site.conf.bak-prelogin nginx-site.conf
+cp docker-compose.yml.bak-prelogin docker-compose.yml
+docker compose up -d --remove-orphans
+docker exec rfp_site nginx -s reload
+```

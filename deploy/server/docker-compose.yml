@@ -19,6 +19,9 @@
 #      a compromised web server cannot modify the deployed content.
 #   3. Port 8090 is free on the host. It is bound to 127.0.0.1 only, for local
 #      debugging and health checks, and is never reachable from the internet.
+#   4. Credentials for the login gate live in /home/mm/apps/rfp/.env on the
+#      server, which is NOT in the repository. See .env.example for the shape.
+#      Never commit the real values: this repository is public.
 
 services:
   rfp_site:
@@ -38,6 +41,10 @@ services:
       - "127.0.0.1:8090:80"
     networks:
       - ohasp_app_network
+    depends_on:
+      # Ordering only. rfp_site still starts if the gate is unhealthy, and the
+      # resolver directive in nginx-site.conf keeps the config loadable.
+      - rfp_auth
     healthcheck:
       # wget is present in nginx:alpine, curl is not.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
@@ -45,6 +52,33 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  rfp_auth:
+    # Login gate for the report. Answers nginx's auth_request subrequest and
+    # serves the login form. Standard library only, so the official Python
+    # image runs it directly with no build step and no pip install.
+    image: python:3.12-alpine
+    container_name: rfp_auth
+    restart: unless-stopped
+    command: ["python3", "-u", "/app/app.py"]
+    volumes:
+      # The service is a single file, mounted read-only.
+      - /home/mm/apps/rfp/auth/app.py:/app/app.py:ro
+    env_file:
+      # Holds RFP_USER, RFP_PASSWORD and RFP_SESSION_SECRET. Kept on the
+      # server only, never in version control.
+      - /home/mm/apps/rfp/.env
+    # No ports published. Only rfp_site reaches this, over the Docker network.
+    networks:
+      - ohasp_app_network
+    healthcheck:
+      # python:alpine has neither curl nor wget, so use Python itself.
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 networks:
   ohasp_app_network:
