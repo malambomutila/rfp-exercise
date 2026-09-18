@@ -1,0 +1,20 @@
+# Personal scratch space, never tracked
+local/
+
+# Credentials
+.env
+*.env
+!*.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Cached API responses
+data/raw/
+
+# Agent tooling scratch output
+.playwright-mcp/
+site/

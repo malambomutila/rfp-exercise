@@ -1,0 +1,53 @@
+# RFP opportunities report: static file server.
+#
+# Purpose
+#   Serves the generated static site (site/index.html and site/data.json) for
+#   https://rfp.malambomutila.com. This stack owns only the static serving. TLS
+#   termination and public routing stay with the pre-existing "nginx" container
+#   from the ohasp stack, which is the only container allowed to bind 80/443.
+#
+# Deployed location on the server: /home/mm/apps/rfp/docker-compose.yml
+# Bring up with:  docker compose -f /home/mm/apps/rfp/docker-compose.yml up -d
+#
+# Assumptions, flagged deliberately:
+#   1. The external Docker network ohasp_app_network already exists and carries
+#      the front-facing nginx container. We attach to it so that nginx can
+#      reach this service by its DNS alias "rfp_site" without publishing a
+#      public port.
+#   2. The site content directory /home/mm/apps/rfp/site is owned by user "mm"
+#      and is written by the CI/CD job over rsync. It is mounted read-only, so
+#      a compromised web server cannot modify the deployed content.
+#   3. Port 8090 is free on the host. It is bound to 127.0.0.1 only, for local
+#      debugging and health checks, and is never reachable from the internet.
+
+services:
+  rfp_site:
+    image: nginx:1.27-alpine
+    container_name: rfp_site
+    # Match the image already proven on this host, so no new image is pulled
+    # and behaviour is predictable.
+    restart: unless-stopped
+    volumes:
+      # Generated site content, read-only inside the container.
+      - /home/mm/apps/rfp/site:/usr/share/nginx/html:ro
+      # Minimal server config: static files, no proxying, no TLS.
+      - /home/mm/apps/rfp/nginx-site.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      # Loopback only. The public path is main nginx -> rfp_site over the
+      # Docker network, so this mapping exists purely for on-host diagnosis.
+      - "127.0.0.1:8090:80"
+    networks:
+      - ohasp_app_network
+    healthcheck:
+      # wget is present in nginx:alpine, curl is not.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  ohasp_app_network:
+    # Created and owned by the ohasp stack. Declared external so that this
+    # stack never creates, modifies or removes it.
+    external: true

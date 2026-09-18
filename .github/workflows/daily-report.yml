@@ -1,0 +1,127 @@
+name: Daily RFP report
+
+# What this workflow does, in one line: it builds the daily RFP digest, publishes
+# it to GitHub Pages, and keeps a dated copy in reports/ so the history survives.
+
+on:
+  schedule:
+    # 05:30 UTC daily, which is 07:30 in Lusaka (UTC+2) and 08:30 in Nairobi
+    # (UTC+3). Both are before the start of the working day, so the report is
+    # already waiting when the fundraising director sits down. GitHub cron is
+    # always UTC and has no timezone field, so the offset is baked into the
+    # expression below.
+    - cron: '30 5 * * *'
+  # Manual trigger, used for the first run after setup and for re-running the
+  # report on demand without waiting for the next cron tick.
+  workflow_dispatch:
+
+# Least privilege that still covers all three things this workflow needs to do:
+#   contents: write  commits the dated archive copy back to main
+#   pages: write     publishes the site to GitHub Pages
+#   id-token: write  lets deploy-pages authenticate via OIDC
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Two runs must never overlap. An overlap would race on the push to main and
+# could deploy an older report over a newer one. cancel-in-progress is false on
+# purpose: a run that is already committing should be allowed to finish.
+concurrency:
+  group: rfp-daily-report
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build report and archive it
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # DELIBERATE CHOICE: there is no pip install step. The tool is Python
+      # standard library only, so there is nothing to install. This keeps the
+      # run fast, removes dependency resolution as a failure mode, and means a
+      # reviewer can clone the repo and run python src/main.py with no setup.
+      - name: Build the report
+        env:
+          # Optional. The scorer uses this to refine its rationales when the
+          # secret exists. The job is NOT gated on it: when the secret is
+          # absent this resolves to an empty string and the tool falls back to
+          # deterministic keyword scoring, so the workflow still succeeds.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python src/main.py
+
+      - name: Locate the generated site
+        id: resolve_site
+        run: |
+          # ASSUMPTION: src/main.py writes the rendered report to site/index.html.
+          # The fallbacks cover the other output directory names in common use so
+          # a small change on the rendering side does not silently break the
+          # deploy. If none of them holds an index.html the build fails loudly
+          # here rather than publishing an empty artifact.
+          for candidate in site _site public; do
+            if [ -f "$candidate/index.html" ]; then
+              echo "site_dir=$candidate" >> "$GITHUB_OUTPUT"
+              echo "Found the generated report at $candidate/index.html"
+              exit 0
+            fi
+          done
+          echo "No index.html found in site/, _site/ or public/." >&2
+          echo "src/main.py must write the rendered report to site/index.html." >&2
+          exit 1
+
+      - name: Archive the dated report on main
+        run: |
+          # The workflow keeps its own durable archive so the daily history is
+          # visible in the repository, not just on the live Pages URL which only
+          # ever shows today.
+          report_date="$(date -u +%F)"
+          mkdir -p reports
+          cp "${{ steps.resolve_site.outputs.site_dir }}/index.html" "reports/${report_date}.html"
+
+          # NOTE: this is the workflow committing its own generated output. It is
+          # deliberately attributed to the github-actions bot so that these
+          # machine commits are easy to tell apart from the human authored
+          # commits in this repository.
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # Only reports/ is staged. Nothing else the run touched, for example a
+          # local scratch directory or a cached API response, can reach the
+          # public repository through this step.
+          git add reports/
+
+          # Guard: on a day when the report is byte identical to an existing
+          # archived copy there is nothing to commit, and git commit would exit
+          # non zero and fail the run.
+          if git diff --cached --quiet; then
+            echo "Archive unchanged for ${report_date}, nothing to commit."
+          else
+            git commit -m "Daily RFP report for ${report_date}"
+            git push
+          fi
+
+      - name: Upload the site as a Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.resolve_site.outputs.site_dir }}
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    # The github-pages environment is what exposes the live URL on the run
+    # summary and in the repository sidebar.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4
