@@ -17,4 +17,9 @@ data/raw/
 
 # Agent tooling scratch output
 .playwright-mcp/
+# Generated report output. Rebuilt by every run and by the Actions job,
+# so it must never be committed. site2/ and the rest cover the scratch
+# build directories produced by --out when comparing two scoring runs.
 site/
+site2/
+site_*/

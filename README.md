@@ -9,16 +9,17 @@ High tier first, and click straight through to the original notice.
 
 **Live report: <https://rfp.malambomutila.com>**
 
-Until the DNS record has propagated and the TLS certificate has been issued,
-the same report is served at
-<https://malambomutila.github.io/rfp-exercise/>.
+The same report is mirrored on GitHub Pages at
+<https://malambomutila.github.io/rfp-exercise/>. The two are independent
+delivery paths, so if one breaks the other keeps serving.
 
 ## How it works
 
 A GitHub Actions workflow runs `python src/main.py` on a daily cron at 05:30
 UTC, which is before the working day starts in Lusaka and Nairobi. The run
 publishes the rendered page to GitHub Pages and commits a dated copy to
-`reports/` so the history is kept.
+`reports/` so the history is kept. A second workflow copies the same build to
+the server that answers for `rfp.malambomutila.com`.
 
 ```
  fetch          four open APIs and portals, queried in parallel
@@ -36,7 +37,8 @@ publishes the rendered page to GitHub Pages and commits a dated copy to
  render         one self contained index.html plus data.json, no CDN,
    |            no web fonts, no external requests
    v
- publish        GitHub Pages serves it at rfp.malambomutila.com
+ publish        rsync to the server behind rfp.malambomutila.com, and
+   |            GitHub Pages for the github.io mirror
 ```
 
 ## Data sources
@@ -141,7 +143,6 @@ without touching the network.
 ## Repository layout
 
 ```
-CNAME                             custom domain for GitHub Pages
 README.md                         this file
 src/sources.py                    one fetcher per source, all returning the
                                   same record shape
@@ -151,6 +152,7 @@ src/score.py                      rules scorer, then the optional model refineme
 src/render.py                     builds index.html and data.json
 src/main.py                       the pipeline the workflow runs
 .github/workflows/daily-report.yml  daily cron, build, archive, deploy
+.github/workflows/deploy-server.yml deploys the same build to the server
 docs/deployment.md                setting up Pages, the secret, DNS and TLS
 docs/reflection-notes.md          notes on tradeoffs and next steps
 reports/                          dated archive, one HTML file per day,
@@ -158,8 +160,8 @@ reports/                          dated archive, one HTML file per day,
 site/                             generated output, rebuilt on every run,
                                   not tracked
 data/                             cached API responses, not tracked
-deploy/server/                    static file serving stack, for the case where
-                                  the report is self hosted behind nginx
+deploy/server/                    nginx serving stack for the custom domain,
+                                  which is the primary delivery path
 ```
 
 ## Limitations

@@ -11,6 +11,17 @@ report. It is written for someone who has never seen the server.
 The two paths are deliberately independent. They share the build command but
 nothing else, so a failure in one does not take the other down.
 
+One thing can break that independence, so it is worth knowing about. If a file
+named `CNAME` is placed in the repository root, `src/main.py` copies it into the
+build output, and the daily workflow uploads that output as the GitHub Pages
+artifact. GitHub reads it as a custom domain for Pages and then redirects the
+`github.io` URL to whatever it names. A `CNAME` containing
+`rfp.malambomutila.com` would therefore point Pages at a host name that this
+server already answers for, collapsing the two paths into one and taking the
+`github.io` URL down. No such file exists today, so the copy step is a no-op,
+but the hazard returns the moment one is added. If a custom domain on Pages is
+ever wanted, it needs a different host name from this one.
+
 ## What runs where
 
 ### The server

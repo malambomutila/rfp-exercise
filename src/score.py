@@ -481,10 +481,15 @@ def _build_rationale(hits, days_old):
     sentences.append(_age_phrase(days_old))
 
     if negatives:
+        # The matched phrase is quoted rather than dropped into the sentence
+        # bare. The negative vocabulary now holds contract forms as well as
+        # trades, for example "individual consultant", and "the notice also
+        # involves individual consultant" does not read as English. Quoting
+        # keeps the sentence correct whatever the vocabulary grows to hold.
         sentences.append(
-            "Caution, the notice also involves "
-            + _join_english([n.lower() for n in negatives[:3]])
-            + ", which is outside IDinsight's services."
+            "Caution, the notice also mentions "
+            + _join_english(['"' + n.lower() + '"' for n in negatives[:3]])
+            + ", which points away from IDinsight's work."
         )
 
     return " ".join(sentences)
