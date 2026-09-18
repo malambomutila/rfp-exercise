@@ -7,7 +7,7 @@ render(records, out_dir, generated_at) writes two files into out_dir:
                  sits in a single <style> block and the only JavaScript is a
                  short vanilla filter script. No CDN, no web fonts, no external
                  request of any kind, so the page renders identically from a
-                 GitHub Pages URL, a local file or an email attachment.
+                 web server, a local file or an email attachment.
     data.json    the scored records plus a small run header, so the digest is
                  reusable and auditable after the fact.
 
@@ -853,7 +853,7 @@ def _render_footer(source_names, queried_names, scored_by_llm):
     return (
         "<footer><p>" + _esc(sources_line) + "</p>"
         + "<p>This page regenerates every day from a GitHub Actions schedule and "
-        "is published to GitHub Pages. No action is needed to refresh it.</p>"
+        "is deployed to rfp.malambomutila.com. No action is needed to refresh it.</p>"
         + "<p>" + _esc(scoring_line) + "</p>"
         + "<p>Scores are a shortlisting aid, not a bid decision. Always open the "
         "original notice before committing effort.</p></footer>"

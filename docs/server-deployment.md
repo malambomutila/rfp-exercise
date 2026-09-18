@@ -1,26 +1,19 @@
-# Server deployment: rfp.malambomutila.com
+# Deployment: rfp.malambomutila.com
 
-This document covers the second of the two delivery paths for the generated RFP
-report. It is written for someone who has never seen the server.
+This document covers how the generated RFP report reaches the web. It is
+written for someone who has never seen the server.
 
-- **Path A, GitHub Pages:** https://malambomutila.github.io/rfp-exercise/, built
-  and published by `.github/workflows/daily-report.yml`. Not covered here.
-- **Path B, own server:** https://rfp.malambomutila.com, built and deployed by
-  `.github/workflows/deploy-server.yml`. This document.
+There is one delivery path: `.github/workflows/daily-report.yml` builds the
+report, commits a dated copy to `reports/`, and rsyncs the rendered site to
+this server, which serves it at https://rfp.malambomutila.com behind a login
+gate.
 
-The two paths are deliberately independent. They share the build command but
-nothing else, so a failure in one does not take the other down.
-
-One thing can break that independence, so it is worth knowing about. If a file
-named `CNAME` is placed in the repository root, `src/main.py` copies it into the
-build output, and the daily workflow uploads that output as the GitHub Pages
-artifact. GitHub reads it as a custom domain for Pages and then redirects the
-`github.io` URL to whatever it names. A `CNAME` containing
-`rfp.malambomutila.com` would therefore point Pages at a host name that this
-server already answers for, collapsing the two paths into one and taking the
-`github.io` URL down. No such file exists today, so the copy step is a no-op,
-but the hazard returns the moment one is added. If a custom domain on Pages is
-ever wanted, it needs a different host name from this one.
+An earlier version also published to GitHub Pages as a second path. That was
+dropped once the server was working. It had been a quick way to get a shareable
+link up before the server existed, and it was costing more than it returned:
+each workflow ran the pipeline separately, so the two URLs served different
+data from runs minutes apart. There is now one build and one destination, which
+removes that whole class of inconsistency.
 
 ## What runs where
 
@@ -87,7 +80,7 @@ stopped `rfp_site` container does not make `nginx -t` fail for the whole host.
 
 ## How the pipeline works
 
-`.github/workflows/deploy-server.yml` runs on GitHub-hosted runners and fires on
+`.github/workflows/daily-report.yml` runs on GitHub-hosted runners and fires on
 three triggers:
 
 1. **Push to `main`** touching `src/**`, `data/**`, `deploy/**` or the workflow
@@ -216,7 +209,7 @@ rsync -rlptvz --delete -e "ssh -i <path to the deploy key>" \
 ```
 
 There is no automatic content history on the server, only the current copy. The
-`reports/` directory in the repository and the GitHub Pages history are the
+`reports/` directory in the repository is the
 archive to pull a previous version from.
 
 **The site container is misbehaving.** Recreate only this stack. This cannot

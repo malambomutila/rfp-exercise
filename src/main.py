@@ -95,14 +95,9 @@ def build(days=7, out_dir="site", archive_dir="reports", use_llm=True):
         shutil.copyfile(index_path, stamped)
         _log(f"stage archive: {stamped}")
 
-    # DELIBERATELY NO CNAME STEP. rfp.malambomutila.com is served by the
-    # self-hosted nginx in deploy/server, not by GitHub Pages, so this
-    # directory must not carry a CNAME file: a CNAME in the Pages artifact
-    # would make Pages claim the same hostname that nginx already serves, and
-    # the two would fight over it. Pages stays on its github.io address as a
-    # mirror. If the delivery path is ever switched back to Pages, copy the
-    # repository CNAME into out_dir here and remove the nginx vhost.
-
+    # No CNAME file is written. The custom domain is served by the nginx stack
+    # in deploy/server, which terminates TLS for rfp.malambomutila.com itself,
+    # so there is no static host that needs to be told which hostname to claim.
     # Return what was rendered, not everything that was scored, so the caller
     # reports the number the director will actually see on the page.
     return shortlist

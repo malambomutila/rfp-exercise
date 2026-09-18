@@ -9,20 +9,21 @@ High tier first, and click straight through to the original notice.
 
 **Live report: <https://rfp.malambomutila.com>**
 
-The same report is mirrored on GitHub Pages at
-<https://malambomutila.github.io/rfp-exercise/>. The two are independent
-delivery paths, so if one breaks the other keeps serving.
+Access is behind a shared sign-in, so the report is not open to the public web.
+Ask the maintainer for the credentials. It is a courtesy gate over public
+tender notices rather than a real access control, and a production version
+would use IDinsight's own single sign-on.
 
 ## How it works
 
 A GitHub Actions workflow runs `python src/main.py` on a daily cron at 05:30
 UTC, which is before the working day starts in Lusaka and Nairobi. The run
-publishes the rendered page to GitHub Pages and commits a dated copy to
-`reports/` so the history is kept. A second workflow copies the same build to
-the server that answers for `rfp.malambomutila.com`.
+commits a dated copy to `reports/` so the history is kept, rsyncs the rendered
+page to the server that answers for `rfp.malambomutila.com`, and then checks
+the live URL responds. Nothing else is published.
 
 ```
- fetch          four open APIs and portals, queried in parallel
+ fetch          eight APIs, portals and web pages, queried in parallel
    |            (a source that fails contributes nothing and is skipped)
    v
  deduplicate    collapse the same notice posted to two portals, by URL
@@ -37,8 +38,8 @@ the server that answers for `rfp.malambomutila.com`.
  render         one self contained index.html plus data.json, no CDN,
    |            no web fonts, no external requests
    v
- publish        rsync to the server behind rfp.malambomutila.com, and
-   |            GitHub Pages for the github.io mirror
+ publish        rsync to the server behind rfp.malambomutila.com, which
+                serves it through nginx over TLS behind a login gate
 ```
 
 ## Data sources
@@ -131,7 +132,7 @@ cd rfp-exercise
 python src/main.py
 ```
 
-The run takes a couple of minutes, most of it waiting on the four sources, and
+The run takes a few minutes, most of it waiting on the eight sources, and
 writes `site/index.html` and `site/data.json`. Open the HTML file directly in
 a browser: it is self contained, with no external requests. The key is
 optional, and the run works without it:
@@ -141,31 +142,63 @@ OPENROUTER_API_KEY=[OPENROUTER_API_KEY] python src/main.py
 ```
 
 Each module also runs on its own for debugging: `python src/sources.py` prints
-a record count per source, and `python src/render.py` renders a fixture report
-without touching the network.
+a record count per source, `python src/websearch.py` does the same for the web
+sources, `python src/score.py` scores fixtures with no network, and
+`python src/render.py` renders a fixture report.
+
+## Deploying it
+
+The report is served by two small containers on the host that answers for
+`rfp.malambomutila.com`: an nginx container serving the static files and
+enforcing the login gate, and a tiny Python service that validates the login
+form. The repository's own `nginx` container terminates TLS and proxies to
+them. `deploy/server/` holds the compose file and the nginx config, and
+`docs/server-deployment.md` is the full walkthrough, including the DNS record,
+certificate renewal and rollback.
+
+To point this at a different host, three things need changing:
+
+1. **The two repository secrets.** `SERVER_SSH_KEY` is the private half of a
+   deploy-only keypair whose public half is in the server's
+   `authorized_keys`. `OPENROUTER_API_KEY` is optional; without it the report
+   still publishes, scored by the keyword layer alone.
+2. **The host, user and pinned host key** in
+   `.github/workflows/daily-report.yml`, in the "Configure SSH client" and
+   "Deploy the report to the server" steps. Refresh the pinned key with
+   `ssh-keyscan -t ed25519 <host>`.
+3. **The verification URL** in the same workflow's last check, and the server
+   name in `deploy/server/nginx-site.conf`.
+
+Login credentials live in `/home/mm/apps/rfp/.env` on the server, mode 600, and
+are never committed. `deploy/server/.env.example` shows the shape.
 
 ## Repository layout
 
 ```
 README.md                         this file
-src/sources.py                    one fetcher per source, all returning the
-                                  same record shape
+src/sources.py                    one fetcher per API source, all returning
+                                  the same record shape
+src/websearch.py                  the web-page sources: fetch the page, then
+                                  have the model read it
 src/fetch.py                      runs the fetchers in parallel, deduplicates,
                                   filters to the last 7 days
-src/score.py                      rules scorer, then the optional model refinement
+src/score.py                      rules scorer, then the optional model
+                                  refinement of the top 25
 src/render.py                     builds index.html and data.json
 src/main.py                       the pipeline the workflow runs
-.github/workflows/daily-report.yml  daily cron, build, archive, deploy
-.github/workflows/deploy-server.yml deploys the same build to the server
-docs/deployment.md                setting up Pages, the secret, DNS and TLS
+.github/workflows/daily-report.yml  the only workflow: cron, build, archive,
+                                  deploy, verify
+docs/server-deployment.md         the server, the login gate, DNS, TLS and
+                                  rollback
 docs/reflection-notes.md          notes on tradeoffs and next steps
+deploy/server/                    compose file, nginx config and the login
+                                  service for the host
 reports/                          dated archive, one HTML file per day,
                                   committed by the workflow
 site/                             generated output, rebuilt on every run,
                                   not tracked
-data/                             cached API responses, not tracked
-deploy/server/                    nginx serving stack for the custom domain,
-                                  which is the primary delivery path
+data/                             cached API responses and page extractions,
+                                  not tracked
 ```
 
 ## Limitations
