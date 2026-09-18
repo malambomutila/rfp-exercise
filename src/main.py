@@ -95,14 +95,13 @@ def build(days=7, out_dir="site", archive_dir="reports", use_llm=True):
         shutil.copyfile(index_path, stamped)
         _log(f"stage archive: {stamped}")
 
-    # Copy the custom domain file into the site output if the repository has
-    # one. actions/upload-pages-artifact only uploads the directory it is
-    # given, so a CNAME left at the repository root never reaches Pages and
-    # the custom domain silently falls back to the github.io address.
-    cname = Path(__file__).resolve().parent.parent / "CNAME"
-    if cname.is_file():
-        shutil.copyfile(cname, Path(out_dir) / "CNAME")
-        _log(f"stage cname:   copied CNAME into {out_dir}")
+    # DELIBERATELY NO CNAME STEP. rfp.malambomutila.com is served by the
+    # self-hosted nginx in deploy/server, not by GitHub Pages, so this
+    # directory must not carry a CNAME file: a CNAME in the Pages artifact
+    # would make Pages claim the same hostname that nginx already serves, and
+    # the two would fight over it. Pages stays on its github.io address as a
+    # mirror. If the delivery path is ever switched back to Pages, copy the
+    # repository CNAME into out_dir here and remove the nginx vhost.
 
     # Return what was rendered, not everything that was scored, so the caller
     # reports the number the director will actually see on the page.
