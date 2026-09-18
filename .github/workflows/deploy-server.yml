@@ -73,6 +73,11 @@ jobs:
 
       - name: Build the static site
         run: python3 src/main.py --days 7 --out site
+        env:
+          # Without this the model refinement layer silently skips and the
+          # server publishes rules-only scores, which is what happened until
+          # this was added: Pages and the server disagreed on every ranking.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       # Safety gate. rsync runs with --delete, so deploying an empty or broken
       # build would wipe the live site. If the build did not produce an
@@ -134,9 +139,18 @@ jobs:
       - name: Verify the live site responds
         run: |
           set -euo pipefail
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://rfp.malambomutila.com/)
-          echo "https://rfp.malambomutila.com/ returned HTTP $code"
-          test "$code" = "200"
+          # The report sits behind a login gate, so an unauthenticated request
+          # to the root must redirect rather than return the page. Asserting
+          # 302 here also catches the gate failing open, which would silently
+          # publish the report to the public web.
+          root=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://rfp.malambomutila.com/)
+          echo "unauthenticated root returned HTTP $root (expecting 302)"
+          test "$root" = "302"
+
+          # The login form must be reachable, or nobody can get in.
+          form=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://rfp.malambomutila.com/login)
+          echo "login form returned HTTP $form (expecting 200)"
+          test "$form" = "200"
 
       # Always remove the key material from the runner, even if a step above
       # failed. Runners are ephemeral, but do not rely on that.
