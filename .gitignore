@@ -15,6 +15,14 @@ venv/
 # Cached API responses
 data/raw/
 
+# The dated report archive now lives on the server, in
+# deploy/server/reports, written by the scheduler container. It is generated
+# output and no longer belongs in the repository.
+reports/
+deploy/server/site/
+deploy/server/reports/
+deploy/server/cache/
+
 # Agent tooling scratch output
 .playwright-mcp/
 # Generated report output. Rebuilt by every run and by the Actions job,

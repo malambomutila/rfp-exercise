@@ -1,5 +1,12 @@
 # Reflection notes
 
+> Note added after submission. These notes record the reasoning at the time the
+> exercise was submitted, when the schedule ran on GitHub Actions. The schedule
+> has since moved into a container on the server, so the project no longer
+> depends on a hosted CI service at all. The argument below about a Claude Skill
+> being unable to trigger itself still stands; the comparison is now against a
+> scheduler that ships with the project rather than against Actions.
+
 Raw material for the three reflection answers, each of which is capped at 150
 words in the submission. These are arguments and specifics to draw from, not
 finished prose.

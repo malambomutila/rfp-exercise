@@ -16,11 +16,15 @@ would use IDinsight's own single sign-on.
 
 ## How it works
 
-A GitHub Actions workflow runs `python src/main.py` on a daily cron at 05:30
-UTC, which is before the working day starts in Lusaka and Nairobi. The run
-commits a dated copy to `reports/` so the history is kept, rsyncs the rendered
-page to the server that answers for `rfp.malambomutila.com`, and then checks
-the live URL responds. Nothing else is published.
+A small scheduler container runs `python src/main.py` once a day at 05:30 UTC,
+which is before the working day starts in Lusaka and Nairobi. It writes the
+rendered page straight into the directory the web server container serves, and
+keeps a dated copy so the history is available.
+
+The schedule runs on your own server rather than on a hosted CI service, so
+the project is self-contained: clone it, configure it, start it, and it keeps
+producing a daily report with no external account, runner or deploy key
+involved.
 
 ```
  fetch          eight APIs, portals and web pages, queried in parallel
@@ -38,8 +42,9 @@ the live URL responds. Nothing else is published.
  render         one self contained index.html plus data.json, no CDN,
    |            no web fonts, no external requests
    v
- publish        rsync to the server behind rfp.malambomutila.com, which
-                serves it through nginx over TLS behind a login gate
+ publish        written straight into the directory nginx serves, behind
+                TLS and a login gate. No copy step, nothing to go wrong
+                between building and publishing
 ```
 
 ## Data sources
@@ -124,7 +129,7 @@ came from the keyword rules or from the model.
 
 Python 3.12 or later. There are no dependencies: the whole tool is standard
 library, so there is no `requirements.txt` and no `pip install` step, here or
-in the workflow.
+in the scheduler container.
 
 ```
 git clone https://github.com/malambomutila/rfp-exercise.git
@@ -148,29 +153,40 @@ sources, `python src/score.py` scores fixtures with no network, and
 
 ## Deploying it
 
-The report is served by two small containers on the host that answers for
-`rfp.malambomutila.com`: an nginx container serving the static files and
-enforcing the login gate, and a tiny Python service that validates the login
-form. The repository's own `nginx` container terminates TLS and proxies to
-them. `deploy/server/` holds the compose file and the nginx config, and
+The whole thing is three small containers and nothing installed on the host
+beyond Docker. On any server:
+
+```
+git clone https://github.com/malambomutila/rfp-exercise.git
+cd rfp-exercise/deploy/server
+cp .env.example .env
+chmod 600 .env          # then edit it
+docker compose up -d
+docker logs -f rfp_cron
+```
+
+| Container | Image | What it does |
+| --- | --- | --- |
+| `rfp_cron` | `python:3.12-alpine` | Builds the report on a daily schedule |
+| `rfp_site` | `nginx:1.27-alpine` | Serves the report and enforces the login gate |
+| `rfp_auth` | `python:3.12-alpine` | Validates the login form |
+
+It builds once immediately on start, so you are not waiting a day to see
+output. Everything is configured in `.env`: the login credentials, the build
+time (`RFP_SCHEDULE_UTC`, default 05:30 UTC), the freshness window, and the
+optional `OPENROUTER_API_KEY`. Without that key the report still builds, scored
+by the keyword layer alone. `deploy/server/.env.example` documents every
+setting.
+
+Two assumptions worth knowing. The stack does not bind ports 80 or 443,
+because it expects a reverse proxy in front of it to terminate TLS; that is how
+the original host works, where another container already owned those ports. If
+you have no proxy, publish `rfp_site` on a port of your choice and point your
+own web server at it. And `RFP_NETWORK` must name an existing Docker network
+that your proxy is also on, so it can reach `rfp_site` by name.
+
 `docs/server-deployment.md` is the full walkthrough, including the DNS record,
-certificate renewal and rollback.
-
-To point this at a different host, three things need changing:
-
-1. **The two repository secrets.** `SERVER_SSH_KEY` is the private half of a
-   deploy-only keypair whose public half is in the server's
-   `authorized_keys`. `OPENROUTER_API_KEY` is optional; without it the report
-   still publishes, scored by the keyword layer alone.
-2. **The host, user and pinned host key** in
-   `.github/workflows/daily-report.yml`, in the "Configure SSH client" and
-   "Deploy the report to the server" steps. Refresh the pinned key with
-   `ssh-keyscan -t ed25519 <host>`.
-3. **The verification URL** in the same workflow's last check, and the server
-   name in `deploy/server/nginx-site.conf`.
-
-Login credentials live in `/home/mm/apps/rfp/.env` on the server, mode 600, and
-are never committed. `deploy/server/.env.example` shows the shape.
+certificate renewal, routine operations and rollback.
 
 ## Repository layout
 
@@ -185,18 +201,17 @@ src/fetch.py                      runs the fetchers in parallel, deduplicates,
 src/score.py                      rules scorer, then the optional model
                                   refinement of the top 25
 src/render.py                     builds index.html and data.json
-src/main.py                       the pipeline the workflow runs
-.github/workflows/daily-report.yml  the only workflow: cron, build, archive,
-                                  deploy, verify
+src/main.py                       the pipeline the scheduler runs
+deploy/server/docker-compose.yml  the three containers
+deploy/server/run-scheduler.sh    the daily schedule, POSIX sh
+deploy/server/.env.example        every setting, documented
 docs/server-deployment.md         the server, the login gate, DNS, TLS and
                                   rollback
 docs/reflection-notes.md          notes on tradeoffs and next steps
 deploy/server/                    compose file, nginx config and the login
                                   service for the host
-reports/                          dated archive, one HTML file per day,
-                                  committed by the workflow
-site/                             generated output, rebuilt on every run,
-                                  not tracked
+site/                             generated output when run locally, not
+                                  tracked
 data/                             cached API responses and page extractions,
                                   not tracked
 ```

@@ -1,50 +1,93 @@
-# RFP opportunities report: static file server.
+# RFP opportunity report: the whole serving stack.
 #
-# Purpose
-#   Serves the generated static site (site/index.html and site/data.json) for
-#   https://rfp.malambomutila.com. This stack owns only the static serving. TLS
-#   termination and public routing stay with the pre-existing "nginx" container
-#   from the ohasp stack, which is the only container allowed to bind 80/443.
+# Three containers, none of which needs anything installed on the host beyond
+# Docker itself:
 #
-# Deployed location on the server: /home/mm/apps/rfp/docker-compose.yml
-# Bring up with:  docker compose -f /home/mm/apps/rfp/docker-compose.yml up -d
+#   rfp_cron   builds the report on a daily schedule
+#   rfp_site   serves the generated files and enforces the login gate
+#   rfp_auth   validates the login form
+#
+# Setup on any server:
+#
+#   git clone https://github.com/malambomutila/rfp-exercise.git
+#   cd rfp-exercise/deploy/server
+#   cp .env.example .env     # then edit it
+#   docker compose up -d
+#
+# Every path below is relative to this file, so the project runs from wherever
+# it is cloned. Nothing is hardcoded to one machine.
 #
 # Assumptions, flagged deliberately:
-#   1. The external Docker network ohasp_app_network already exists and carries
-#      the front-facing nginx container. We attach to it so that nginx can
-#      reach this service by its DNS alias "rfp_site" without publishing a
-#      public port.
-#   2. The site content directory /home/mm/apps/rfp/site is owned by user "mm"
-#      and is written by the CI/CD job over rsync. It is mounted read-only, so
-#      a compromised web server cannot modify the deployed content.
-#   3. Port 8090 is free on the host. It is bound to 127.0.0.1 only, for local
-#      debugging and health checks, and is never reachable from the internet.
-#   4. Credentials for the login gate live in /home/mm/apps/rfp/.env on the
-#      server, which is NOT in the repository. See .env.example for the shape.
-#      Never commit the real values: this repository is public.
+#   1. Ports 80 and 443 are NOT bound here. This stack expects a reverse proxy
+#      in front of it to terminate TLS, because on the original host another
+#      container already owned those ports. If you have no proxy, publish
+#      rfp_site on a port of your choice and point your own web server at it.
+#   2. The external Docker network named in RFP_NETWORK must already exist and
+#      must be the network your reverse proxy is on, so the proxy can reach
+#      rfp_site by that name. Create one with:
+#        docker network create rfp_network
+#      and set RFP_NETWORK=rfp_network in .env.
+#   3. .env holds the login credentials and the optional model key. It is
+#      gitignored and must never be committed.
 
 services:
+  rfp_cron:
+    # Builds the report on a schedule. This is the job that used to be a
+    # GitHub Actions cron. Moving it here means the schedule ships with the
+    # project: no Actions runner, no deploy key, no repository secrets, and it
+    # keeps working for anyone who deploys this on their own server.
+    image: python:3.12-alpine
+    container_name: rfp_cron
+    restart: unless-stopped
+    command: ["/bin/sh", "/app/bin/run-scheduler.sh"]
+    volumes:
+      # The pipeline itself, read-only. Two directories up from deploy/server
+      # is the repository root.
+      - ../../src:/app/src:ro
+      - ./run-scheduler.sh:/app/bin/run-scheduler.sh:ro
+      # Writable: the generated report, which rfp_site serves read-only.
+      - ./site:/app/site
+      # Writable: the dated archive, one HTML file per day. This is the
+      # equivalent of what the old workflow committed back to the repository.
+      - ./reports:/app/reports
+      # Writable: cached API responses and page extractions, so a restart does
+      # not repeat work that is still fresh.
+      - ./cache:/app/data/raw
+    env_file:
+      - .env
+    environment:
+      # Explicit rather than relying on the script's defaults, so the running
+      # configuration is visible in "docker inspect" and in this file.
+      RFP_SRC_DIR: /app/src
+      RFP_OUT_DIR: /app/site
+      RFP_ARCHIVE_DIR: /app/reports
+      # Python writes .pyc files into the read-only source mount otherwise,
+      # which fails noisily on every run.
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - rfp_net
+
   rfp_site:
     image: nginx:1.27-alpine
     container_name: rfp_site
-    # Match the image already proven on this host, so no new image is pulled
-    # and behaviour is predictable.
     restart: unless-stopped
     volumes:
-      # Generated site content, read-only inside the container.
-      - /home/mm/apps/rfp/site:/usr/share/nginx/html:ro
-      # Minimal server config: static files, no proxying, no TLS.
-      - /home/mm/apps/rfp/nginx-site.conf:/etc/nginx/conf.d/default.conf:ro
+      # The report, written by rfp_cron. Read-only here, so a compromised web
+      # server cannot alter what it serves.
+      - ./site:/usr/share/nginx/html:ro
+      - ./nginx-site.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      # Loopback only. The public path is main nginx -> rfp_site over the
-      # Docker network, so this mapping exists purely for on-host diagnosis.
+      # Loopback only. The public path is your reverse proxy to rfp_site over
+      # the Docker network, so this mapping exists purely for on-host
+      # diagnosis. Change the host port if 8090 is taken.
       - "127.0.0.1:8090:80"
-    networks:
-      - ohasp_app_network
     depends_on:
       # Ordering only. rfp_site still starts if the gate is unhealthy, and the
       # resolver directive in nginx-site.conf keeps the config loadable.
       - rfp_auth
+    networks:
+      - rfp_net
     healthcheck:
       # wget is present in nginx:alpine, curl is not.
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
@@ -54,23 +97,20 @@ services:
       start_period: 10s
 
   rfp_auth:
-    # Login gate for the report. Answers nginx's auth_request subrequest and
-    # serves the login form. Standard library only, so the official Python
-    # image runs it directly with no build step and no pip install.
+    # Login gate. Answers nginx's auth_request subrequest and serves the login
+    # form. Standard library only, so the official Python image runs it
+    # directly with no build step and no pip install.
     image: python:3.12-alpine
     container_name: rfp_auth
     restart: unless-stopped
     command: ["python3", "-u", "/app/app.py"]
     volumes:
-      # The service is a single file, mounted read-only.
-      - /home/mm/apps/rfp/auth/app.py:/app/app.py:ro
+      - ./auth/app.py:/app/app.py:ro
     env_file:
-      # Holds RFP_USER, RFP_PASSWORD and RFP_SESSION_SECRET. Kept on the
-      # server only, never in version control.
-      - /home/mm/apps/rfp/.env
+      - .env
     # No ports published. Only rfp_site reaches this, over the Docker network.
     networks:
-      - ohasp_app_network
+      - rfp_net
     healthcheck:
       # python:alpine has neither curl nor wget, so use Python itself.
       test: ["CMD", "python3", "-c",
@@ -81,7 +121,10 @@ services:
       start_period: 5s
 
 networks:
-  ohasp_app_network:
-    # Created and owned by the ohasp stack. Declared external so that this
-    # stack never creates, modifies or removes it.
+  rfp_net:
+    # The network your reverse proxy is also on, so it can reach rfp_site by
+    # container name. Declared external so this stack never creates, modifies
+    # or removes a network that other services depend on. Set RFP_NETWORK in
+    # .env; on the original host this is ohasp_app_network.
+    name: ${RFP_NETWORK:-rfp_network}
     external: true
