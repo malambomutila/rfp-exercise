@@ -868,12 +868,20 @@ def fetch_ted(since_date):
 # Registry
 # ---------------------------------------------------------------------------
 
+# Web page sources live in src/websearch.py: the foundation and multilateral
+# pages that have no feed behind them, read by fetching the HTML and extracting
+# the notices with one model call per page. That module reuses the helpers above
+# and this one registers its fetchers, so the two import each other. websearch
+# resolves its side lazily, which is why this import is safe here; it sits in
+# the registry section because registration is the only thing it is for.
+import websearch  # noqa: E402 - imported beside the registry it feeds
+
 SOURCES = [
     ("World Bank", fetch_worldbank),
     ("UNDP", fetch_undp),
     ("Grants.gov", fetch_grants_gov),
     ("TED (EU)", fetch_ted),
-]
+] + websearch.WEB_SOURCES
 
 
 def fetch_all(since_date, max_workers=4):

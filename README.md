@@ -49,6 +49,10 @@ the server that answers for `rfp.malambomutila.com`.
 | UNDP | Procurement notices from UNDP country offices, around 570 open at any time, with heavy coverage of the African and Asian countries IDinsight works in. | No API exists, so the server rendered notice table at `procurement-notices.undp.org` is parsed with a regular expression |
 | Grants.gov | US federal funding opportunities, which is where USAID, CDC, NIH and MCC calls appear. Queried with nine narrow keyword passes, for example "impact evaluation" and "monitoring and evaluation", because the index scores one keyword string at a time. | JSON API, `api.grants.gov/v1/api/search2`, plus one detail call per record for the description and the award ceiling |
 | TED (EU) | EU and EEA public contract notices, filtered to nine CPV codes covering evaluation consultancy, social research, survey and data analysis services. EU external action contracts for evaluation work in Africa and Asia surface here. | JSON API, `api.ted.europa.eu/v3/notices/search` |
+| UNGM | The United Nations Global Marketplace, the widest single source of multilateral consultancy work: notices from WHO, UNICEF, UNDP, ILO, IOM, FAO, UNFPA and others. Queried with nine single service keywords rather than enumerated by date, which returns around a hundred already relevant notices instead of several hundred mostly irrelevant ones. | Undocumented POST endpoint, `ungm.org/Public/Notice/Search`, returning an HTML fragment that is parsed deterministically. No model call. The exact payload and its several traps are documented in `src/websearch.py` |
+| Gavi | Gavi's open requests for proposals, expressions of interest and consulting opportunities, covering immunisation programme support, evidence and surveillance work. | Web page, fetched then read by the model |
+| Global Fund | Business opportunities plus the independent evaluation pipeline, which pre-announces forthcoming evaluation requests for proposals. | Web page, fetched then read by the model. Currently returns nothing, see Limitations |
+| IDRC | Open research funding calls from Canada's International Development Research Centre. | Web page, fetched then read by the model |
 
 Three other sources were tried and dropped, with the reason recorded in
 `src/sources.py` so nobody retries them blindly: ReliefWeb, whose v1 API is
@@ -168,15 +172,25 @@ deploy/server/                    nginx serving stack for the custom domain,
 
 These are real and worth knowing before trusting the ranking.
 
-- **Coverage stops where open APIs stop.** The four sources here are the ones
-  that serve machine readable data without a key or a subscription. The
+- **Coverage stops where open access stops.** The eight sources here are the
+  ones reachable without a key or a subscription. The
   aggregators that development organisations actually pay for, Devex and
   DevelopmentAid, are behind paywalls and are absent, so anything they carry
   exclusively will not appear in this report.
-- **Foundation calls are mostly invisible.** Gates Foundation, Hewlett, Rockefeller
-  and most bilateral donors publish calls as ordinary HTML pages with no feed
-  and no API. Reaching them needs a scraper per funder, which is real
-  maintenance, not a configuration change.
+- **Foundation and multilateral web pages are partly covered now, not fully.**
+  Opportunities published as ordinary web pages rather than through an API used
+  to be invisible. Four such sources are now read: UNGM, Gavi, the Global Fund
+  and IDRC. Rather than a brittle scraper per funder, each page is fetched and
+  then read by the model, so a site restyle does not break the parse the way a
+  CSS selector would. What is still missing, and why: the Gates Foundation
+  solicitation portal renders entirely in JavaScript and serves no listing to a
+  plain HTTP client; the Global Fund's live tenders sit behind an Oracle Fusion
+  portal that returns only a loader script, so that source contributes nothing
+  today and is kept only for its evaluation pipeline page; Hewlett is largely
+  invitation based, so there is often no open call to find; and the Asian and
+  African Development Banks block scripted requests outright. Reaching those
+  needs a headless browser in the pipeline, which would end the promise that
+  this tool installs nothing.
 - **Keyword scoring cannot read a tender's technical requirements.** It sees
   the title, the summary and the tagged country and sector fields. It cannot
   tell a serious impact evaluation from a notice that merely uses the phrase,
@@ -187,6 +201,14 @@ These are real and worth knowing before trusting the ranking.
   ignored, so the weights cannot learn. They are informed judgement, set by
   hand, and they will stay exactly as good as that judgement until someone
   feeds real outcomes back in.
+- **The web sources depend on a model reading a page correctly.** Extraction is
+  instructed to return null rather than guess, and no fabricated notice has
+  been found in spot checks against live pages, but this is a real trust
+  boundary that the API sources do not have. One known ambiguity is recorded in
+  the `fetch_gavi` docstring: Gavi shows one unlabelled date per listing, the
+  markup implies a posting date, yet most of those dates are in the future, so
+  the extraction reads them as closing dates. If a Gavi deadline is ever wrong,
+  that is why.
 - **Source fragility is uneven.** The UNDP fetcher reads a rendered HTML table.
   If UNDP restyle that page the parse returns nothing and the report quietly
   loses one source rather than failing loudly. The same applies, less
