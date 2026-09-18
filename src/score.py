@@ -49,28 +49,50 @@ import urllib.request
 # scoring policy can be tuned in one place.
 # ---------------------------------------------------------------------------
 
-GEOGRAPHY_MAX = 25
-SECTOR_MAX = 20
-SERVICE_MAX = 35
-RECENCY_MAX = 20
+GEOGRAPHY_MAX = 20
+SECTOR_MAX = 15
+SERVICE_MAX = 30
+RECENCY_MAX = 10
 PENALTY_MAX = 40
+
+# Buyer fit. IDinsight's clients are governments, multilaterals, foundations,
+# international agencies and NGOs, so who is issuing the notice is a real
+# relevance signal in its own right. Worth 15 points in the shared rubric.
+BUYER_MAX = 15
+BUYER_TERMS = [
+    "ministry", "government", "national statistics", "bureau of statistics",
+    "department of", "municipal", "county government", "state government",
+    "united nations", "undp", "unicef", "unfpa", "unhcr", "wfp", "who",
+    "world health organization", "world bank", "ifc", "african development bank",
+    "asian development bank", "afdb", "adb", "european commission",
+    "global fund", "gavi", "unitaid", "gates foundation", "hewlett",
+    "rockefeller", "wellcome", "idrc", "usaid", "fcdo", "giz", "sida", "norad",
+    "danida", "jica", "kfw", "foundation", "trust", "ngo",
+    "non-governmental", "charity", "consortium", "secretariat",
+]
+
+# Deadline feasibility. A notice closing in three days is not actionable even
+# if it is a perfect fit, and one with no readable deadline cannot be planned
+# around. Worth 10 points in the shared rubric.
+DEADLINE_MAX = 10
+DEADLINE_COMFORTABLE_DAYS = 14
 
 # Points for the first match in a group, then for each further distinct match.
 # A second or third match adds less than the first, because one clear signal is
 # most of the evidence and repetition adds little.
 GEOGRAPHY_COUNTRY_FIRST = 18
-GEOGRAPHY_REGION_FIRST = 12
-GEOGRAPHY_EXTRA = 7
+GEOGRAPHY_REGION_FIRST = 13
+GEOGRAPHY_EXTRA = 4
 
-SECTOR_FIRST = 12
-SECTOR_EXTRA = 4
+SECTOR_FIRST = 13
+SECTOR_EXTRA = 2
 
 # Service terms are split in two. A "strong" term names the work IDinsight
 # actually sells, for example an impact evaluation. A "supporting" term is
 # suggestive but weak on its own, for example the word "research".
-SERVICE_STRONG_FIRST = 22
-SERVICE_SUPPORT_FIRST = 12
-SERVICE_EXTRA = 6
+SERVICE_STRONG_FIRST = 27
+SERVICE_SUPPORT_FIRST = 13
+SERVICE_EXTRA = 3
 
 PENALTY_FIRST = 20
 PENALTY_EXTRA = 10
@@ -81,8 +103,8 @@ RECENCY_WINDOW_DAYS = 7
 RECENCY_FLOOR = 5
 
 # Tier thresholds, inclusive lower bounds.
-TIER_HIGH_MIN = 45
-TIER_MEDIUM_MIN = 30
+TIER_HIGH_MIN = 80
+TIER_MEDIUM_MIN = 60
 
 # ---------------------------------------------------------------------------
 # Layer 2 configuration.
@@ -270,6 +292,7 @@ _SECTOR_PATTERNS = _compile_terms(PRIORITY_SECTORS)
 _SERVICE_STRONG_PATTERNS = _compile_terms(SERVICE_TERMS_STRONG)
 _SERVICE_SUPPORT_PATTERNS = _compile_terms(SERVICE_TERMS_SUPPORTING)
 _NEGATIVE_PATTERNS = _compile_terms(NEGATIVE_TERMS)
+_BUYER_PATTERNS = _compile_terms(BUYER_TERMS)
 
 
 def _find_terms(text, patterns):
@@ -593,7 +616,41 @@ def score_record(record, today=None):
         raw_penalty = int(round(raw_penalty / 2.0))
     penalty = -raw_penalty
 
-    total = geography + sector + service + recency + penalty
+    # Buyer fit. Who is issuing the notice is its own relevance signal, because
+    # IDinsight's clients are governments, multilaterals, foundations,
+    # international agencies and NGOs. A named buyer in the structured funder or
+    # source field is stronger evidence than the same word appearing loose in
+    # the body text, so the two are scored differently.
+    buyer_field = " ".join(
+        str(record.get(k) or "") for k in ("funder", "source")
+    ).lower()
+    if _find_terms(buyer_field, _BUYER_PATTERNS):
+        buyer = BUYER_MAX
+    elif _find_terms(text, _BUYER_PATTERNS):
+        buyer = int(round(BUYER_MAX * 0.67))
+    else:
+        buyer = 0
+
+    # Deadline feasibility. A perfect notice closing in three days is not
+    # actionable, and one with no readable deadline cannot be planned around.
+    # Assumption: an unreadable or absent deadline scores zero rather than
+    # being treated as generous, because overstating available time is the more
+    # damaging error for someone deciding what to pursue today.
+    deadline_date = _parse_iso_date(record.get("deadline"))
+    if deadline_date is None:
+        deadline = 0
+    else:
+        days_left = (deadline_date - reference).days
+        if days_left >= DEADLINE_COMFORTABLE_DAYS:
+            deadline = DEADLINE_MAX
+        elif days_left >= 7:
+            deadline = int(round(DEADLINE_MAX * 0.6))
+        elif days_left >= 1:
+            deadline = int(round(DEADLINE_MAX * 0.3))
+        else:
+            deadline = 0
+
+    total = geography + sector + service + recency + buyer + deadline + penalty
     total = max(0, min(100, int(total)))
 
     # Service-fit gate. IDinsight sells evaluation, monitoring, data and
@@ -648,6 +705,8 @@ def score_record(record, today=None):
         "sector": sector,
         "service": service,
         "recency": recency,
+        "buyer": buyer,
+        "deadline": deadline,
         "penalty": penalty,
     }
     scored["scored_by"] = "rules"
@@ -676,22 +735,46 @@ def score_baseline(records, today=None):
 LLM_SYSTEM_PROMPT = (
     "You screen tender notices for IDinsight, a global development analytics "
     "organisation that works with governments, foundations and NGOs across "
-    "Africa and Asia. IDinsight sells impact evaluation, monitoring and "
-    "evaluation, data systems, data science and machine learning, and "
-    "programme diagnosis. It does not sell construction, equipment supply, "
-    "logistics, catering or other procurement of goods.\n\n"
-    "You are given notices that a keyword scorer has already ranked. Your job "
-    "is to correct the keyword scorer's obvious mistakes. Lower the score when "
-    "a word such as evaluation appears only in boilerplate, when the research "
-    "is in a discipline IDinsight does not serve, or when the notice is really "
-    "a goods or works contract. Raise the score when the notice is clearly "
-    "analytical work that the keyword scorer under-rated.\n\n"
-    "For each notice return a score from 0 to 100, a tier of High for 65 and "
-    "above, Medium for 40 to 64 and Low below 40, and a rationale of one "
-    "sentence written for a senior fundraising director who is not a "
-    "technical specialist. Say what the work is and why it fits or does not. "
-    "Do not mention scores, keywords or models in the rationale. Use UK "
-    "English. Do not use emojis or em dashes.\n\n"
+    "Africa and Asia.\n\n"
+    "IDinsight sells: monitoring, evaluation and learning; impact and process "
+    "evaluations; randomised evaluations and implementation research; survey "
+    "design, data collection and qualitative research; data analytics, data "
+    "science, machine learning and AI; AI evaluation, responsible AI and "
+    "digital public services; evidence synthesis and evidence-informed "
+    "programme design; decision support, resource targeting and optimisation; "
+    "programme implementation diagnostics; and dashboards, data systems and "
+    "organisational data capacity.\n\n"
+    "Priority sectors: health, education, agriculture, social protection, "
+    "governance, sanitation, financial inclusion, gender, economic "
+    "opportunity, environment, energy and poverty reduction.\n\n"
+    "EXCLUDE, scoring these below " + str(TIER_MEDIUM_MIN) + ": jobs and "
+    "individual staff posts, scholarships and fellowships, product supply and "
+    "goods procurement, construction and works, and anything needing "
+    "capabilities clearly unrelated to IDinsight.\n\n"
+    "You are given notices that a keyword scorer has already ranked. Correct "
+    "its obvious mistakes. Lower the score when a term such as evaluation "
+    "appears only in boilerplate, when the research is in a discipline "
+    "IDinsight does not serve such as laboratory or clinical science, or when "
+    "the notice is really a goods, works or recruitment contract. Raise it "
+    "when the notice is clearly analytical work the keyword scorer "
+    "under-rated.\n\n"
+    "Score each notice from 0 to 100 using this rubric:\n"
+    "  service fit " + str(SERVICE_MAX) + "\n"
+    "  geographic fit " + str(GEOGRAPHY_MAX) + "\n"
+    "  sector fit " + str(SECTOR_MAX) + "\n"
+    "  buyer or client fit " + str(BUYER_MAX) + "\n"
+    "  deadline feasibility " + str(DEADLINE_MAX) + "\n"
+    "  evidence quality and recency " + str(RECENCY_MAX) + "\n\n"
+    "Tiers: High for " + str(TIER_HIGH_MIN) + " and above, Medium for "
+    + str(TIER_MEDIUM_MIN) + " to " + str(TIER_HIGH_MIN - 1) + ", Low below "
+    + str(TIER_MEDIUM_MIN) + ".\n\n"
+    "Do not invent missing facts. If a notice is only partially relevant, say "
+    "so and why. Do not lower the standard to fill the list: scoring "
+    "everything Low is the correct answer on a quiet day.\n\n"
+    "Write the rationale as one sentence for a senior fundraising director who "
+    "is not a technical specialist. Say what the work is and why it fits or "
+    "does not. Do not mention scores, keywords or models. Use UK English. Do "
+    "not use emojis or em dashes.\n\n"
     "Reply with JSON only, in the form "
     '{"results": [{"id": "...", "score": 0, "tier": "Low", '
     '"rationale": "..."}]}. Return one entry for every notice given, using the '
@@ -1062,7 +1145,8 @@ if __name__ == "__main__":
         assert record["tier"] in ("High", "Medium", "Low"), record["tier"]
         assert record["scored_by"] == "rules", record["scored_by"]
         assert set(record["signals"]) == {
-            "geography", "sector", "service", "recency", "penalty"
+            "geography", "sector", "service", "recency", "buyer",
+        "deadline", "penalty"
         }, record["signals"]
         assert record["rationale"] and "--" not in record["rationale"]
 
