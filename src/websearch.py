@@ -54,29 +54,40 @@ Pages probed and rejected, recorded so nobody retries them blindly:
 
 UNGM, read this before touching fetch_ungm
 ------------------------------------------
-https://www.ungm.org/Public/Notice returns HTTP 200 and 147KB, but the notice
-table is not in that HTML. Verified on 2026-09-18: zero occurrences of
-"Notice/<id>" anywhere in the response, and the only links in the page are
-navigation such as /Public/ContractAward and /Public/UNSPSC. The table is
-loaded afterwards by a client side call to /Public/Notice/Search, which the
-page wires to a form whose action is "javascript:void(0);".
+https://www.ungm.org/Public/Notice returns HTTP 200, but the notice table is
+not in that HTML: it is loaded afterwards by a client side POST to
+/Public/Notice/Search, wired to a form whose action is "javascript:void(0);".
 
-That endpoint was attempted four ways and returns HTTP 400 every time: JSON
-body, form encoded body, with and without a session cookie jar, and with the
-__RequestVerificationToken lifted from the page and sent both as a field and as
-a RequestVerificationToken header. No RSS or sitemap route exists either:
-/Public/Notice/Rss and /sitemap.xml both return HTTP 404, and
-/Public/SiteMap/Index carries no notice links.
+That endpoint is usable, but it is fussy, and the failure mode for every
+mistake below is an unhelpful HTTP 400. The exact request was captured from a
+real browser session. What matters:
 
-Individual notices ARE readable. https://www.ungm.org/Public/Notice/312928
-returns HTTP 200 and 120KB with the full notice in the HTML, so the extractor
-works fine on UNGM once a notice URL is known. The missing piece is discovery,
-not parsing, and closing it needs either the real shape of the Search call or a
-headless browser, neither of which fits this project's standard library only
-promise. fetch_ungm therefore fetches the list page, finds no notice links and
-returns [] with one explanatory line on stderr. fetch_notice_detail is kept and
-is exercised against notice 312928 by the self check in __main__, so the day
-UNGM discovery becomes possible the parsing half is already proven.
+  - Every field in the payload is mandatory. Omitting isPicker, IsActive,
+    NoticeSearchTotalLabelId or TypeOfCompetitions returns 400. This is what
+    makes the endpoint look unusable on a first attempt.
+  - PageSize is validated against an allow list. 15 works. 20, 25, 30, 50 and
+    100 all return 400. Paginate with PageIndex instead.
+  - Dates are "dd-MMM-yyyy". ISO dates return 400.
+  - SortField accepts "Deadline" and "DatePublished". "Published" returns 500.
+  - The antiforgery token must be scraped from the list page and sent in a
+    RequestVerificationToken header with the session cookie held. The page
+    carries two such hidden inputs and either is accepted.
+
+Discovery is by keyword, not by date. UNGM's own PublishedFrom filter is not
+reliable for this purpose: a 7 day window enumerated 198 notices yet omitted
+notice 312928, which the notice page itself states was published on
+15-Sep-2026, while a title search finds it immediately. So fetch_ungm queries
+UNGM with IDinsight's service vocabulary and filters on the published date
+after parsing. That is also cheaper and more precise, returning around a
+hundred already relevant notices rather than several hundred mostly irrelevant
+ones.
+
+The search response is an HTML fragment, one div per notice, carrying the
+title, deadline, published date, agency, notice type, reference and country.
+So this source costs no model call at all: the fragment is parsed
+deterministically. fetch_notice_detail is kept for reading an individual
+notice page, and is exercised against notice 312928 by the self check in
+__main__.
 """
 
 import datetime
@@ -1191,7 +1202,8 @@ def _self_check(window_days=7, run_fixture=True):
     print("\nFixture, UNGM notice 312928 (one extra model call, cached 6h):")
     fixture = fetch_notice_detail(FIXTURE_URL, "UNGM")
     if not fixture:
-        print("  NOT EXTRACTED. See the UNGM section of the module docstring.")
+        print("  NOT EXTRACTED. The notice may have closed and been removed;\n"
+              "  check https://www.ungm.org/Public/Notice/312928 in a browser.")
         return
     record = fixture[0]
     checks = [

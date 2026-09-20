@@ -9,14 +9,65 @@ High tier first, and click straight through to the original notice.
 
 **Live report: <https://rfp.malambomutila.com>**
 
-Access is behind a shared sign-in, so the report is not open to the public web.
-Ask the maintainer for the credentials. It is a courtesy gate over public
-tender notices rather than a real access control, and a production version
-would use IDinsight's own single sign-on.
+Sign in with the credentials given in the submission email. The gate keeps the
+page off the open web; it is a courtesy gate over public tender notices rather
+than a real access control, and a production version would use IDinsight's own
+single sign-on.
+
+> **For the IDinsight review team.** This deployment is temporary and will be
+> taken down once the exercise has been reviewed. The tool does not depend on
+> it: everything needed to run the pipeline yourself is in this repository, it
+> needs nothing installed beyond Python 3.12 or later, and the two-minute
+> version is directly below. If the link is already down by the time you read
+> this, that is expected, and running it locally gives you the same report
+> built from live data.
+
+## Try it in two minutes
+
+No dependencies, no API key, no account. This is the whole thing:
+
+```
+git clone https://github.com/malambomutila/rfp-exercise.git
+cd rfp-exercise
+python3 src/main.py
+```
+
+It queries eight live sources, so give it three to five minutes, most of which
+is waiting on the slower portals. It prints a running commentary of each stage
+to the terminal, then writes `site/index.html`. Open that file in a browser:
+it is entirely self contained, with no external requests, so it works offline
+and from a file:// URL.
+
+A run with no key looks like this, and the numbers will differ on the day you
+run it because the sources are live:
+
+```
+stage fetch:   552 records from 8 sources
+stage dedupe:  536 after removing duplicates
+stage fresh:   509 published within 7 days
+score: OPENROUTER_API_KEY not set, using baseline scores only.
+stage score:   509 scored, 2 high, 3 medium, 504 low
+stage floor:   321 at or above score 20, 188 lower-scoring notices omitted
+stage render:  site/index.html and site/data.json
+done: 321 opportunities rendered in the report
+```
+
+That run is the deterministic keyword layer on its own, which is the honest
+floor of what the tool does. To see the full thing, including the model
+re-scoring the top 25 and writing the one-line rationale under each
+opportunity, supply a key for OpenRouter or any endpoint exposing the same
+chat completions API:
+
+```
+OPENROUTER_API_KEY=[OPENROUTER_API_KEY] python3 src/main.py
+```
+
+The page states which layer scored each result, so you can always tell the two
+apart.
 
 ## How it works
 
-A small scheduler container runs `python src/main.py` once a day at 05:30 UTC,
+A small scheduler container runs `python3 src/main.py` once a day at 05:30 UTC,
 which is before the working day starts in Lusaka and Nairobi. It writes the
 rendered page straight into the directory the web server container serves, and
 keeps a dated copy so the history is available.
@@ -125,31 +176,40 @@ Two layers, in this order:
 Records show which layer scored them, so it is always clear whether a ranking
 came from the keyword rules or from the model.
 
-## Running it locally
+## Running it: the options
 
-Python 3.12 or later. There are no dependencies: the whole tool is standard
-library, so there is no `requirements.txt` and no `pip install` step, here or
-in the scheduler container.
+The quick start above covers the common case. The rest of the surface:
 
-```
-git clone https://github.com/malambomutila/rfp-exercise.git
-cd rfp-exercise
-python src/main.py
-```
+| Command | What it does |
+| --- | --- |
+| `python3 src/main.py` | The full pipeline, 7-day window, writes `site/` |
+| `python3 src/main.py --days 14` | Widen the freshness window |
+| `python3 src/main.py --out /tmp/report` | Write somewhere other than `site/` |
+| `python3 src/main.py --no-llm` | Force keyword scoring even when a key is set, useful for comparing the two layers |
+| `python3 src/main.py --archive ""` | Skip writing the dated archive copy |
 
-The run takes a few minutes, most of it waiting on the eight sources, and
-writes `site/index.html` and `site/data.json`. Open the HTML file directly in
-a browser: it is self contained, with no external requests. The key is
-optional, and the run works without it:
+Each module also runs on its own, which is the quickest way to inspect one
+part without waiting for the whole pipeline:
 
-```
-OPENROUTER_API_KEY=[OPENROUTER_API_KEY] python src/main.py
-```
+| Command | What it does |
+| --- | --- |
+| `python3 src/sources.py` | Record count per API source |
+| `python3 src/websearch.py` | Same for the web-page sources |
+| `python3 src/score.py` | Scores built-in fixtures, no network, no key |
+| `python3 src/render.py` | Renders a fixture report, no network |
 
-Each module also runs on its own for debugging: `python src/sources.py` prints
-a record count per source, `python src/websearch.py` does the same for the web
-sources, `python src/score.py` scores fixtures with no network, and
-`python src/render.py` renders a fixture report.
+Requirements are Python 3.12 or later and nothing else. There is no
+`requirements.txt` and no `pip install` step, here or in the scheduler
+container, which is deliberate: it removes dependency resolution as a failure
+mode and means this repository runs as-is on any machine with a recent Python.
+Tested on 3.12 and 3.14.
+
+Two things worth knowing when you run it. The sources are live, so two runs an
+hour apart will not return identical numbers, and a portal being slow or down
+on the day shows up as that source contributing nothing rather than as a
+crash. And `data/` fills with cached API responses and page extractions so a
+repeated run within six hours does not re-fetch or re-pay for the same work;
+delete it to force a clean run.
 
 ## Deploying it
 
@@ -208,8 +268,8 @@ deploy/server/.env.example        every setting, documented
 docs/server-deployment.md         the server, the login gate, DNS, TLS and
                                   rollback
 docs/reflection-notes.md          notes on tradeoffs and next steps
-deploy/server/                    compose file, nginx config and the login
-                                  service for the host
+deploy/server/auth/app.py         the login service
+deploy/server/nginx-site.conf     serving rules and the login gate
 site/                             generated output when run locally, not
                                   tracked
 data/                             cached API responses and page extractions,
